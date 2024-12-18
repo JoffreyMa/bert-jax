@@ -2,7 +2,9 @@ import jax
 import jax.numpy as jnp
 import optax
 import numpy as np
-from flax.training import train_state
+from flax.training import train_state, checkpoints, orbax_utils
+from flax import linen as nn
+import orbax.checkpoint as ocp
 from bert import SimpleBERT
 from datasets import load_from_disk
 from transformers import AutoTokenizer
@@ -10,7 +12,7 @@ from transformers import DataCollatorForLanguageModeling
 from tqdm import tqdm
 
 
-#@jax.jit
+@jax.jit
 def train_step(state, inputs, labels):
     def train_loss_fn(params):
         logits = state.apply_fn({'params': params}, inputs)
@@ -23,7 +25,7 @@ def train_step(state, inputs, labels):
     return state, loss
 
 
-#@jax.jit
+@jax.jit
 def eval_step(state, inputs, labels):
     logits = state.apply_fn({'params': state.params}, inputs)
     one_hot_labels = jax.nn.one_hot(labels, logits.shape[-1])
@@ -32,18 +34,8 @@ def eval_step(state, inputs, labels):
     return loss, predictions
 
 
-def train(model, train_dataset, val_dataset, data_collator, batch_size, num_epochs, learning_rate, tokenizer):
-    key = jax.random.PRNGKey(0)
-    input_ids = np.random.randint(0, 32000, (1, 512))
-
-    # Initialize model and optimizer
-    params = model.init(key, input_ids)['params']
-    tx = optax.adam(learning_rate)
-    state = train_state.TrainState.create(apply_fn=model.apply, params=params, tx=tx)
-
-    # Val
-    
-
+def train(state, train_dataset, val_dataset, data_collator, batch_size, num_epochs, tokenizer, checkpoint_manager, save_args):
+    step = 0
     # Training loop
     for epoch in range(num_epochs):
         with tqdm(total=round(len(train_dataset) / batch_size), desc='[Training]') as pbar:
@@ -52,6 +44,9 @@ def train(model, train_dataset, val_dataset, data_collator, batch_size, num_epoc
                 state, loss = train_step(state, batch_inputs, batch_labels)
                 pbar.update(1)
                 pbar.set_postfix(loss=loss.item())
+                step += 1
+                # Save
+                checkpoint_manager.save(step, state, save_kwargs={'save_args': save_args})
         print(f"[Training] Epoch {epoch + 1}, Loss: {loss}")
 
         val_sequences_results = [] # reset at each epoch
@@ -67,7 +62,6 @@ def train(model, train_dataset, val_dataset, data_collator, batch_size, num_epoc
         for val_sequence in val_sequences_results:
             print(f"Input: {val_sequence['input']}\nOutput: {val_sequence['output']}")
 
-
 def collator_to_jax(data_collator_output):
     jax_data = {key: value.numpy() for key, value in data_collator_output.items()}
     return jax_data
@@ -82,19 +76,53 @@ def data_generator(dataset, data_collator, batch_size):
 
 if __name__ == "__main__":
     batch_size=10
-    
+    learning_rate=1e-4
+    dataset_path = "/home/infres/jma-21/bert-jax/data"
+    ckpt_path = "/home/infres/jma-21/bert-jax/checkpoint"
+    ckpt_step = None # examples: "384" or None
+    model = None
+
     # Load model
+    # model = SimpleBERT(
+    #     vocab_size=32000,
+    #     max_seq_length=512,
+    #     dim=768,
+    #     num_heads=12,
+    #     num_layers=10,
+    #     hidden_dim=768*4,
+    # )
     model = SimpleBERT(
         vocab_size=32000,
         max_seq_length=512,
         dim=8,
         num_heads=4,
         num_layers=2,
-        hidden_dim=32,
+        hidden_dim=64,
     )
 
+    # Checkpointer
+    orbax_checkpointer = ocp.PyTreeCheckpointer()
+    # Restore checkpoint
+    key = jax.random.PRNGKey(0)
+    input_ids = np.random.randint(0, 32000, (1, 512))
+
+    # Initialize model and optimizer
+    params = model.init(key, input_ids)['params']
+    tx = optax.adam(learning_rate)
+    state = train_state.TrainState.create(apply_fn=model.apply, params=params, tx=tx)
+    if ckpt_step:
+        # Placeholder for state structure to initialize the restored state
+        state = orbax_checkpointer.restore(ckpt_path + '/' + ckpt_step + '/default', item=state)
+        
+
+    # Prepare state versioning and automatic bookkeeping
+    save_args = orbax_utils.save_args_from_target(state)
+    options = ocp.CheckpointManagerOptions(max_to_keep=1, create=True)
+    checkpoint_manager = ocp.CheckpointManager(ckpt_path, orbax_checkpointer, options)
+
     # Load dataset
-    dataset = load_from_disk("/home/infres/jma-21/bert-jax/data")
+    dataset = load_from_disk(dataset_path)
+    # split_dataset = dataset.train_test_split(test_size=0.1)
     split_dataset = dataset.train_test_split(test_size=0.999)
     test_dataset = split_dataset['test']
     trainval_dataset = split_dataset['train'].train_test_split(test_size=0.1)
@@ -105,4 +133,4 @@ if __name__ == "__main__":
         tokenizer=tokenizer, mlm=True, mlm_probability=0.15
     )
     
-    train(model, train_dataset, val_dataset, data_collator, batch_size, num_epochs=3, learning_rate=1e-4, tokenizer=tokenizer)
+    train(state, train_dataset, val_dataset, data_collator, batch_size, num_epochs=3, tokenizer=tokenizer, checkpoint_manager=checkpoint_manager, save_args=save_args)
