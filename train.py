@@ -45,8 +45,6 @@ def train(state, train_dataset, val_dataset, data_collator, batch_size, num_epoc
                 pbar.update(1)
                 pbar.set_postfix(loss=loss.item())
                 step += 1
-                # Save
-                checkpoint_manager.save(step, state, save_kwargs={'save_args': save_args})
         print(f"[Training] Epoch {epoch + 1}, Loss: {loss}")
 
         val_sequences_results = [] # reset at each epoch
@@ -60,7 +58,10 @@ def train(state, train_dataset, val_dataset, data_collator, batch_size, num_epoc
                 pbar.set_postfix(loss=loss.item())
         print(f"[Validation] Epoch {epoch + 1}, Loss: {loss}")
         for val_sequence in val_sequences_results:
-            print(f"Input: {val_sequence['input']}\nOutput: {val_sequence['output']}")
+            print(f"Input: {val_sequence['input']}\n######################################################################################################\nOutput: {val_sequence['output']}")
+
+        # Save
+        checkpoint_manager.save(step, state, save_kwargs={'save_args': save_args})
 
 def collator_to_jax(data_collator_output):
     jax_data = {key: value.numpy() for key, value in data_collator_output.items()}
@@ -75,7 +76,7 @@ def data_generator(dataset, data_collator, batch_size):
 
 
 if __name__ == "__main__":
-    batch_size=10
+    batch_size=32
     learning_rate=1e-4
     dataset_path = "/home/infres/jma-21/bert-jax/data"
     ckpt_path = "/home/infres/jma-21/bert-jax/checkpoint"
@@ -83,22 +84,22 @@ if __name__ == "__main__":
     model = None
 
     # Load model
-    # model = SimpleBERT(
-    #     vocab_size=32000,
-    #     max_seq_length=512,
-    #     dim=768,
-    #     num_heads=12,
-    #     num_layers=10,
-    #     hidden_dim=768*4,
-    # )
     model = SimpleBERT(
         vocab_size=32000,
         max_seq_length=512,
-        dim=8,
+        dim=128,
         num_heads=4,
-        num_layers=2,
-        hidden_dim=64,
+        num_layers=4,
+        hidden_dim=512,
     )
+    # model = SimpleBERT(
+    #     vocab_size=32000,
+    #     max_seq_length=512,
+    #     dim=8,
+    #     num_heads=4,
+    #     num_layers=2,
+    #     hidden_dim=64,
+    # )
 
     # Checkpointer
     orbax_checkpointer = ocp.PyTreeCheckpointer()
@@ -122,8 +123,8 @@ if __name__ == "__main__":
 
     # Load dataset
     dataset = load_from_disk(dataset_path)
-    # split_dataset = dataset.train_test_split(test_size=0.1)
-    split_dataset = dataset.train_test_split(test_size=0.999)
+    split_dataset = dataset.train_test_split(test_size=0.1)
+    # split_dataset = dataset.train_test_split(test_size=0.999)
     test_dataset = split_dataset['test']
     trainval_dataset = split_dataset['train'].train_test_split(test_size=0.1)
     train_dataset, val_dataset = trainval_dataset['train'], trainval_dataset['test'] 
@@ -133,4 +134,4 @@ if __name__ == "__main__":
         tokenizer=tokenizer, mlm=True, mlm_probability=0.15
     )
     
-    train(state, train_dataset, val_dataset, data_collator, batch_size, num_epochs=3, tokenizer=tokenizer, checkpoint_manager=checkpoint_manager, save_args=save_args)
+    train(state, train_dataset, val_dataset, data_collator, batch_size, num_epochs=10, tokenizer=tokenizer, checkpoint_manager=checkpoint_manager, save_args=save_args)

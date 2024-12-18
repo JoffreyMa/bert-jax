@@ -169,3 +169,6 @@ data
 
 # Tokenizer
 tokenizer
+
+# Checkpoints
+checkpoint
