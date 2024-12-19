@@ -77,6 +77,7 @@ def data_generator(dataset, data_collator, batch_size):
 if __name__ == "__main__":
     #batch_size=32
     batch_size=2
+    num_epochs=10
     learning_rate=1e-4
     dataset_path = "/home/infres/jma-21/bert-jax/data"
     ckpt_path = "/home/infres/jma-21/bert-jax/checkpoint"
@@ -101,27 +102,6 @@ if __name__ == "__main__":
     #     hidden_dim=64,
     # )
 
-    # Checkpointer
-    orbax_checkpointer = ocp.PyTreeCheckpointer()
-    # Restore checkpoint
-    key = jax.random.PRNGKey(0)
-    input_ids = np.random.randint(0, 32000, (1, 512))
-
-    # Initialize model and optimizer
-    params = model.init(key, input_ids)['params']
-    schedule = optax.linear_schedule(init_value=learning_rate, end_value=1e-6, transition_steps=1000)
-    tx = optax.adam(schedule)
-    state = train_state.TrainState.create(apply_fn=model.apply, params=params, tx=tx)
-    if ckpt_step:
-        # Placeholder for state structure to initialize the restored state
-        state = orbax_checkpointer.restore(ckpt_path + '/' + ckpt_step + '/default', item=state)
-        
-
-    # Prepare state versioning and automatic bookkeeping
-    save_args = orbax_utils.save_args_from_target(state)
-    options = ocp.CheckpointManagerOptions(max_to_keep=1, create=True)
-    checkpoint_manager = ocp.CheckpointManager(ckpt_path, orbax_checkpointer, options)
-
     # Load dataset
     dataset = load_from_disk(dataset_path)
     split_dataset = dataset.train_test_split(test_size=0.1)
@@ -134,5 +114,27 @@ if __name__ == "__main__":
     data_collator = DataCollatorForLanguageModeling(
         tokenizer=tokenizer, mlm=True, mlm_probability=0.15
     )
-    
-    train(state, train_dataset, val_dataset, data_collator, batch_size, num_epochs=10, schedule=schedule, tokenizer=tokenizer, checkpoint_manager=checkpoint_manager, save_args=save_args)
+
+    # Checkpointer
+    orbax_checkpointer = ocp.PyTreeCheckpointer()
+    # Restore checkpoint
+    key = jax.random.PRNGKey(0)
+    input_ids = np.random.randint(0, 32000, (1, 512))
+
+    # Initialize model and optimizer
+    params = model.init(key, input_ids)['params']
+    transition_steps = num_epochs * (len(train_dataset) // batch_size)
+    schedule = optax.linear_onecycle_schedule(transition_steps=transition_steps, peak_value=learning_rate, pct_start=0.1, pct_final=0.9, div_factor=100, final_div_factor=10000)
+    tx = optax.adam(schedule)
+    state = train_state.TrainState.create(apply_fn=model.apply, params=params, tx=tx)
+    if ckpt_step:
+        # Placeholder for state structure to initialize the restored state
+        state = orbax_checkpointer.restore(ckpt_path + '/' + ckpt_step + '/default', item=state)
+        
+
+    # Prepare state versioning and automatic bookkeeping
+    save_args = orbax_utils.save_args_from_target(state)
+    options = ocp.CheckpointManagerOptions(max_to_keep=1, create=True)
+    checkpoint_manager = ocp.CheckpointManager(ckpt_path, orbax_checkpointer, options)
+
+    train(state, train_dataset, val_dataset, data_collator, batch_size, num_epochs=num_epochs, schedule=schedule, tokenizer=tokenizer, checkpoint_manager=checkpoint_manager, save_args=save_args)
