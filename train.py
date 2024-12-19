@@ -12,7 +12,7 @@ from transformers import DataCollatorForLanguageModeling
 from tqdm import tqdm
 
 
-@jax.jit
+#@jax.jit
 def train_step(state, inputs, labels):
     def train_loss_fn(params):
         logits = state.apply_fn({'params': params}, inputs)
@@ -25,7 +25,7 @@ def train_step(state, inputs, labels):
     return state, loss
 
 
-@jax.jit
+#@jax.jit
 def eval_step(state, inputs, labels):
     logits = state.apply_fn({'params': state.params}, inputs)
     one_hot_labels = jax.nn.one_hot(labels, logits.shape[-1])
@@ -34,18 +34,17 @@ def eval_step(state, inputs, labels):
     return loss, predictions
 
 
-def train(state, train_dataset, val_dataset, data_collator, batch_size, num_epochs, tokenizer, checkpoint_manager, save_args):
-    step = 0
+def train(state, train_dataset, val_dataset, data_collator, batch_size, num_epochs, schedule, tokenizer, checkpoint_manager, save_args):
     # Training loop
     for epoch in range(num_epochs):
         with tqdm(total=round(len(train_dataset) / batch_size), desc='[Training]') as pbar:
             for batch in data_generator(train_dataset, data_collator, batch_size):
                 batch_inputs, batch_labels = batch['input_ids'], batch['labels'] 
                 state, loss = train_step(state, batch_inputs, batch_labels)
+                lr = schedule(state.step)
                 pbar.update(1)
-                pbar.set_postfix(loss=loss.item())
-                step += 1
-        print(f"[Training] Epoch {epoch + 1}, Loss: {loss}")
+                pbar.set_postfix({"loss":loss.item(), "lr":lr})
+        print(f"[Training] Epoch {epoch + 1}, Loss: {loss}, Learning rate: {lr}")
 
         val_sequences_results = [] # reset at each epoch
         with tqdm(total=round(len(val_dataset) / batch_size), desc='[Validation]') as pbar:
@@ -61,7 +60,7 @@ def train(state, train_dataset, val_dataset, data_collator, batch_size, num_epoc
             print(f"Input: {val_sequence['input']}\n######################################################################################################\nOutput: {val_sequence['output']}")
 
         # Save
-        checkpoint_manager.save(step, state, save_kwargs={'save_args': save_args})
+        checkpoint_manager.save(state.step, state, save_kwargs={'save_args': save_args})
 
 def collator_to_jax(data_collator_output):
     jax_data = {key: value.numpy() for key, value in data_collator_output.items()}
@@ -76,7 +75,8 @@ def data_generator(dataset, data_collator, batch_size):
 
 
 if __name__ == "__main__":
-    batch_size=32
+    #batch_size=32
+    batch_size=2
     learning_rate=1e-4
     dataset_path = "/home/infres/jma-21/bert-jax/data"
     ckpt_path = "/home/infres/jma-21/bert-jax/checkpoint"
@@ -109,7 +109,8 @@ if __name__ == "__main__":
 
     # Initialize model and optimizer
     params = model.init(key, input_ids)['params']
-    tx = optax.adam(learning_rate)
+    schedule = optax.linear_schedule(init_value=learning_rate, end_value=1e-6, transition_steps=1000)
+    tx = optax.adam(schedule)
     state = train_state.TrainState.create(apply_fn=model.apply, params=params, tx=tx)
     if ckpt_step:
         # Placeholder for state structure to initialize the restored state
@@ -134,4 +135,4 @@ if __name__ == "__main__":
         tokenizer=tokenizer, mlm=True, mlm_probability=0.15
     )
     
-    train(state, train_dataset, val_dataset, data_collator, batch_size, num_epochs=10, tokenizer=tokenizer, checkpoint_manager=checkpoint_manager, save_args=save_args)
+    train(state, train_dataset, val_dataset, data_collator, batch_size, num_epochs=10, schedule=schedule, tokenizer=tokenizer, checkpoint_manager=checkpoint_manager, save_args=save_args)
