@@ -2,8 +2,7 @@ import jax
 import jax.numpy as jnp
 import optax
 import numpy as np
-from flax.training import train_state, checkpoints, orbax_utils
-from flax import linen as nn
+from flax.training import train_state, orbax_utils
 import orbax.checkpoint as ocp
 from bert import SimpleBERT
 from datasets import load_from_disk
@@ -53,8 +52,9 @@ def train(state, train_dataset, val_dataset, data_collator, batch_size, num_epoc
                 })
                 pbar.update(1)
                 pbar.set_postfix({"loss":loss.item(), "lr":lr})
-        print(f"[Training] Epoch {epoch + 1}, Average Train Loss: {train_loss / len(train_dataset)}, Learning rate: {lr}")
-        wandb.log({"epoch": epoch + 1, "train_loss": loss})
+        avg_train_loss = train_loss / len(train_dataset)
+        print(f"[Training] Epoch {epoch + 1}, Average Train Loss: {avg_train_loss}, Learning rate: {lr}")
+        wandb.log({"epoch": epoch + 1, "avg_train_loss": avg_train_loss})
 
         val_loss = 0
         val_sequences_results = [] # reset at each epoch
@@ -67,8 +67,9 @@ def train(state, train_dataset, val_dataset, data_collator, batch_size, num_epoc
                     val_sequences_results.append({'input': tokenizer.decode(batch_inputs[0], skip_special_tokens=True), 'output': tokenizer.decode(predictions[0], skip_special_tokens=True)})
                 pbar.update(1)
                 pbar.set_postfix(loss=loss.item())
-        print(f"[Validation] Epoch {epoch + 1}, Average Validation Loss: {val_loss / len(val_dataset)}")
-        wandb.log({"epoch": epoch + 1, "val_loss": loss})
+        avg_val_loss = val_loss / len(val_dataset)
+        print(f"[Validation] Epoch {epoch + 1}, Average Validation Loss: {avg_val_loss}")
+        wandb.log({"epoch": epoch + 1, "avg_val_loss": avg_val_loss})
         for val_sequence in val_sequences_results:
             print(f"Input: {val_sequence['input']}\n######################################################################################################\nOutput: {val_sequence['output']}")
 
@@ -89,7 +90,7 @@ def data_generator(dataset, data_collator, batch_size):
 
 if __name__ == "__main__":
     batch_size=32 # 32 or 2 to test
-    num_epochs=50
+    num_epochs=2 # 50 or 2 to test
     learning_rate=1e-4
     dataset_path = "/home/infres/jma-21/bert-jax/data"
     test_size = 0.1 # 0.1 or 0.999 o test
@@ -99,10 +100,10 @@ if __name__ == "__main__":
     model = None
     vocab_size = 32000
     max_seq_length = 512
-    dim = 128 # 128 or 8 to test
-    num_heads = 4 # 4
-    num_layers = 4 # 4 or 2 to test
-    hidden_dim = 512 # 512 or 64 to test
+    dim = 256 # 128 or 8 to test
+    num_heads = 16 # 12 or 4 to test
+    num_layers = 12 # 4 or 2 to test
+    hidden_dim = 1024 # 512 or 64 to test
 
     # Load model
     model = SimpleBERT(
@@ -123,7 +124,7 @@ if __name__ == "__main__":
     # Adapt dataset to MLM
     tokenizer = AutoTokenizer.from_pretrained("tokenizer")
     data_collator = DataCollatorForLanguageModeling(
-        tokenizer=tokenizer, mlm=True, mlm_probability=0.15
+        tokenizer=tokenizer, mlm=True, mlm_probability=0.05
     )
 
     # Checkpointer
